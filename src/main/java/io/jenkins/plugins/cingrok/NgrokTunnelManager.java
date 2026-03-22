@@ -114,6 +114,9 @@ public class NgrokTunnelManager {
     }
 
     public String getTunnelUrl() {
+        if (tunnelUrl == null) {
+            tunnelUrl = fetchTunnelUrl();
+        }
         return tunnelUrl;
     }
 

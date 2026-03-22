@@ -1,4 +1,4 @@
-<?jelly escape='true'?>
+<?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:st="jelly:stapler">
     <l:layout title="ngrok Tunnel Status">
         <l:main-panel>

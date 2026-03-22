@@ -1,4 +1,4 @@
-<?jelly escape='true'?>
+<?jelly escape-by-default='true'?>
 <div>
     Secure ngrok tunnel for webhook delivery to Jenkins behind NAT/firewalls.
     Validates webhook signatures from GitHub, GitLab, Gitea, and Bitbucket

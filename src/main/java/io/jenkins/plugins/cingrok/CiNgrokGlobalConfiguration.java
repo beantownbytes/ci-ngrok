@@ -97,6 +97,15 @@ public class CiNgrokGlobalConfiguration extends GlobalConfiguration implements S
         return null;
     }
 
+    public String getTunnelUrl() {
+        return NgrokTunnelManager.get().getTunnelUrl();
+    }
+
+    public String getWebhookUrl() {
+        String url = getTunnelUrl();
+        return url != null ? url + "/ci-ngrok/webhook" : null;
+    }
+
     public ListBoxModel doFillNgrokAuthtokenCredentialIdItems() {
         Jenkins jenkins = Jenkins.get();
         if (!jenkins.hasPermission(Jenkins.ADMINISTER)) {
