@@ -1,0 +1,29 @@
+<?jelly escape='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:l="/lib/layout" xmlns:st="jelly:stapler">
+    <l:layout title="ngrok Tunnel Status">
+        <l:main-panel>
+            <h1>ngrok Tunnel</h1>
+            <j:choose>
+                <j:when test="${it.enabled}">
+                    <j:choose>
+                        <j:when test="${it.running}">
+                            <p>Status: <span style="color: green; font-weight: bold;">Connected</span></p>
+                            <p>Tunnel URL: <code>${it.tunnelUrl}</code></p>
+                            <p>Webhook URL: <code>${it.webhookUrl}</code></p>
+                            <p style="margin-top: 1em; color: #666;">
+                                Use the webhook URL above in your GitHub/GitLab/Gitea/Bitbucket repository webhook settings.
+                            </p>
+                        </j:when>
+                        <j:otherwise>
+                            <p>Status: <span style="color: red;">Disconnected</span></p>
+                            <p>The tunnel is enabled but not currently running. Check the Jenkins logs for errors.</p>
+                        </j:otherwise>
+                    </j:choose>
+                </j:when>
+                <j:otherwise>
+                    <p>The ngrok tunnel is not enabled. Enable it in Manage Jenkins &gt; System &gt; ci-ngrok Tunnel.</p>
+                </j:otherwise>
+            </j:choose>
+        </l:main-panel>
+    </l:layout>
+</j:jelly>

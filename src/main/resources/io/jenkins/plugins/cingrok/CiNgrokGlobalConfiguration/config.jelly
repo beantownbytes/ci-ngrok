@@ -1,0 +1,28 @@
+<?jelly escape='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
+    <f:section title="ci-ngrok Tunnel">
+        <f:entry title="Enable ngrok tunnel" field="enabled">
+            <f:checkbox/>
+        </f:entry>
+        <f:entry title="ngrok Authtoken" field="ngrokAuthtokenCredentialId">
+            <f:select/>
+        </f:entry>
+        <f:entry title="Webhook Secret" field="webhookSecretCredentialId">
+            <f:select/>
+        </f:entry>
+        <j:if test="${instance.enabled}">
+            <f:entry title="Tunnel Status">
+                <j:choose>
+                    <j:when test="${io.jenkins.plugins.cingrok.NgrokTunnelManager.get().running}">
+                        <span style="color: green; font-weight: bold;">Connected</span>
+                        <br/>
+                        Webhook URL: <code>${io.jenkins.plugins.cingrok.NgrokTunnelManager.get().tunnelUrl}/ci-ngrok/webhook</code>
+                    </j:when>
+                    <j:otherwise>
+                        <span style="color: red;">Disconnected</span>
+                    </j:otherwise>
+                </j:choose>
+            </f:entry>
+        </j:if>
+    </f:section>
+</j:jelly>
