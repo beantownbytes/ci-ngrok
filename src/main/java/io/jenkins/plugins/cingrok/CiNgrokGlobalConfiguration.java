@@ -14,6 +14,7 @@ import org.kohsuke.stapler.StaplerRequest2;
 
 import java.io.Serializable;
 import java.util.Collections;
+import java.util.List;
 import java.util.logging.Logger;
 
 @Extension
@@ -40,12 +41,16 @@ public class CiNgrokGlobalConfiguration extends GlobalConfiguration implements S
         req.bindJSON(this, json);
         save();
 
-        if (this.enabled && !wasEnabled) {
-            NgrokTunnelManager.get().start();
-        } else if (!this.enabled && wasEnabled) {
-            NgrokTunnelManager.get().stop();
-        } else if (this.enabled) {
-            NgrokTunnelManager.get().restart();
+        try {
+            if (this.enabled && !wasEnabled) {
+                NgrokTunnelManager.get().start();
+            } else if (!this.enabled && wasEnabled) {
+                NgrokTunnelManager.get().stop();
+            } else if (this.enabled) {
+                NgrokTunnelManager.get().restart();
+            }
+        } catch (Exception e) {
+            LOGGER.warning("Failed to manage ngrok tunnel: " + e.getMessage());
         }
 
         return true;
@@ -82,9 +87,14 @@ public class CiNgrokGlobalConfiguration extends GlobalConfiguration implements S
         if (credentialId == null || credentialId.isEmpty()) {
             return null;
         }
-        StringCredentials cred = CredentialsProvider.findCredentialById(
-                credentialId, StringCredentials.class, null, Collections.emptyList());
-        return cred != null ? cred.getSecret().getPlainText() : null;
+        List<StringCredentials> creds = CredentialsProvider.lookupCredentialsInItemGroup(
+                StringCredentials.class, Jenkins.get(), ACL.SYSTEM2, Collections.emptyList());
+        for (StringCredentials cred : creds) {
+            if (credentialId.equals(cred.getId())) {
+                return cred.getSecret().getPlainText();
+            }
+        }
+        return null;
     }
 
     public ListBoxModel doFillNgrokAuthtokenCredentialIdItems() {

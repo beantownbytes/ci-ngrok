@@ -118,7 +118,10 @@ public class NgrokTunnelManager {
     }
 
     public boolean isRunning() {
-        return ngrokProcess != null && ngrokProcess.isAlive();
+        if (ngrokProcess != null && ngrokProcess.isAlive()) {
+            return true;
+        }
+        return fetchTunnelUrl() != null;
     }
 
     public synchronized void ensureRunning() {
@@ -126,12 +129,13 @@ public class NgrokTunnelManager {
         if (config == null || !config.isEnabled()) {
             return;
         }
-        if (!isRunning()) {
-            LOGGER.info("ngrok tunnel died, restarting");
-            start();
-        } else if (tunnelUrl == null) {
-            tunnelUrl = fetchTunnelUrl();
+        String currentUrl = fetchTunnelUrl();
+        if (currentUrl != null) {
+            tunnelUrl = currentUrl;
+            return;
         }
+        LOGGER.info("ngrok tunnel not responding, restarting");
+        start();
     }
 
     private Path ensureNgrokBinary() throws IOException, InterruptedException {
