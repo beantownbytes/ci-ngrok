@@ -13,12 +13,12 @@ import jenkins.model.Jenkins;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
@@ -34,17 +34,19 @@ public class NgrokTunnelManager {
     private static final String NGROK_DOWNLOAD_URL_LINUX = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz";
     private static final NgrokTunnelManager INSTANCE = new NgrokTunnelManager();
 
-    private Process ngrokProcess;
-    private String tunnelUrl;
+    private volatile Process ngrokProcess;
+    private volatile String tunnelUrl;
 
     public static NgrokTunnelManager get() {
         return INSTANCE;
     }
 
-    public synchronized void start() {
-        if (ngrokProcess != null && ngrokProcess.isAlive()) {
-            LOGGER.info("ngrok tunnel already running");
-            return;
+    public void start() {
+        synchronized (this) {
+            if (ngrokProcess != null && ngrokProcess.isAlive()) {
+                LOGGER.info("ngrok tunnel already running");
+                return;
+            }
         }
 
         CiNgrokGlobalConfiguration config = CiNgrokGlobalConfiguration.get();
@@ -76,12 +78,15 @@ public class NgrokTunnelManager {
                     "--log", "stdout", "--log-format", "json"
             );
             pb.redirectErrorStream(true);
-            ngrokProcess = pb.start();
-
-            drainProcessOutput(ngrokProcess);
+            Process process = pb.start();
+            drainProcessOutput(process);
 
             Thread.sleep(3000);
-            tunnelUrl = fetchTunnelUrl();
+
+            synchronized (this) {
+                ngrokProcess = process;
+                tunnelUrl = fetchTunnelUrl();
+            }
 
             if (tunnelUrl != null) {
                 LOGGER.info("ngrok tunnel started: " + tunnelUrl);
@@ -108,20 +113,23 @@ public class NgrokTunnelManager {
         tunnelUrl = null;
     }
 
-    public synchronized void restart() {
+    public void restart() {
         stop();
         start();
     }
 
     public String getTunnelUrl() {
-        if (tunnelUrl == null) {
-            tunnelUrl = fetchTunnelUrl();
+        String url = tunnelUrl;
+        if (url == null) {
+            url = fetchTunnelUrl();
+            tunnelUrl = url;
         }
-        return tunnelUrl;
+        return url;
     }
 
     public boolean isRunning() {
-        if (ngrokProcess != null && ngrokProcess.isAlive()) {
+        Process p = ngrokProcess;
+        if (p != null && p.isAlive()) {
             return true;
         }
         return fetchTunnelUrl() != null;
@@ -158,7 +166,7 @@ public class NgrokTunnelManager {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(NGROK_DOWNLOAD_URL_LINUX))
                 .build();
-        HttpResponse<Path> response = client.send(request, HttpResponse.BodyHandlers.ofFile(tgz));
+        client.send(request, HttpResponse.BodyHandlers.ofFile(tgz));
 
         ProcessBuilder extract = new ProcessBuilder("tar", "xzf", tgz.toString(), "-C", ngrokDir.toString());
         Process p = extract.start();
@@ -209,7 +217,7 @@ public class NgrokTunnelManager {
     private void drainProcessOutput(Process process) {
         Thread drainer = new Thread(() -> {
             try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     LOGGER.fine("ngrok: " + line);
