@@ -1,20 +1,25 @@
 package io.jenkins.plugins.cingrok;
 
 import hudson.Extension;
+import hudson.model.Cause;
 import hudson.model.UnprotectedRootAction;
 import io.jenkins.plugins.cingrok.provider.WebhookProvider;
 import jenkins.model.Jenkins;
 import org.kohsuke.stapler.HttpResponse;
 import org.kohsuke.stapler.HttpResponses;
 import org.kohsuke.stapler.StaplerRequest2;
-import org.kohsuke.stapler.StaplerResponse2;
 
-import jakarta.servlet.ServletException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 
 @Extension
 public class WebhookProxyAction implements UnprotectedRootAction {
@@ -36,45 +41,73 @@ public class WebhookProxyAction implements UnprotectedRootAction {
         return "ci-ngrok";
     }
 
-    public HttpResponse doWebhook(StaplerRequest2 request) throws IOException, ServletException {
+    public HttpResponse doWebhook(StaplerRequest2 request) throws IOException {
         CiNgrokGlobalConfiguration config = CiNgrokGlobalConfiguration.get();
         if (config == null || !config.isEnabled()) {
             LOGGER.warning("Webhook received but plugin is disabled");
-            return HttpResponses.error(503, "ci-ngrok is not enabled");
+            return HttpResponses.text("ci-ngrok is not enabled");
         }
 
         String secret = config.resolveSecret(config.getWebhookSecretCredentialId());
         if (secret == null || secret.isEmpty()) {
             LOGGER.warning("Webhook secret not configured");
-            return HttpResponses.error(500, "Webhook secret not configured");
+            return HttpResponses.text("Webhook secret not configured");
         }
 
         byte[] body = request.getInputStream().readAllBytes();
         Map<String, String> headers = extractHeaders(request);
 
+        String event = headers.getOrDefault("X-GitHub-Event",
+                headers.getOrDefault("X-Gitlab-Event",
+                        headers.getOrDefault("X-Gitea-Event", "")));
+
+        if ("ping".equalsIgnoreCase(event)) {
+            LOGGER.info("Ping received");
+            return HttpResponses.text("pong");
+        }
+
         WebhookProvider provider = detectProvider(headers);
         if (provider == null) {
-            LOGGER.warning("No matching webhook provider found for request headers");
-            return HttpResponses.error(400, "Unsupported webhook source");
+            LOGGER.warning("No matching webhook provider for request headers");
+            return HttpResponses.text("Unsupported webhook source");
         }
 
         if (!provider.validate(headers, body, secret)) {
             LOGGER.warning("Invalid " + provider.getName() + " webhook signature");
-            return HttpResponses.error(403, "Invalid signature");
+            return HttpResponses.text("Invalid signature");
         }
 
-        LOGGER.info("Valid " + provider.getName() + " webhook received, forwarding to Generic Webhook Trigger");
+        LOGGER.info("Valid " + provider.getName() + " webhook received");
 
-        return forwardToGenericWebhookTrigger(request, body, headers);
+        String repoFullName = extractRepoFullName(body);
+        if (repoFullName == null || repoFullName.isEmpty()) {
+            LOGGER.warning("Could not extract repository name from payload");
+            return HttpResponses.text("Could not determine repository");
+        }
+
+        List<String> triggered = triggerMatchingJobs(repoFullName);
+
+        if (triggered.isEmpty()) {
+            LOGGER.info("No jobs matched repository " + repoFullName);
+            return HttpResponses.text("No matching jobs for " + repoFullName);
+        }
+
+        String result = String.join(",", triggered);
+        LOGGER.info("Triggered jobs: " + result);
+        return HttpResponses.text("Triggered: " + result);
     }
 
     private WebhookProvider detectProvider(Map<String, String> headers) {
+        WebhookProvider best = null;
+        int bestLength = 0;
         for (WebhookProvider provider : Jenkins.get().getExtensionList(WebhookProvider.class)) {
-            if (headers.containsKey(provider.getSignatureHeader())) {
-                return provider;
+            String header = provider.getSignatureHeader();
+            if (headers.containsKey(header) && header.length() > bestLength) {
+                best = provider;
+                bestLength = header.length();
             }
         }
-        return null;
+        return best;
     }
 
     private Map<String, String> extractHeaders(StaplerRequest2 request) {
@@ -87,33 +120,74 @@ public class WebhookProxyAction implements UnprotectedRootAction {
         return headers;
     }
 
-    private HttpResponse forwardToGenericWebhookTrigger(
-            StaplerRequest2 request, byte[] body, Map<String, String> headers)
-            throws IOException, ServletException {
+    private String extractRepoFullName(byte[] body) {
+        try {
+            JsonObject payload = new Gson().fromJson(new String(body, StandardCharsets.UTF_8), JsonObject.class);
+            JsonObject repo = payload.getAsJsonObject("repository");
+            if (repo != null && repo.has("full_name")) {
+                return repo.get("full_name").getAsString();
+            }
+        } catch (Exception e) {
+            LOGGER.warning("Failed to parse webhook payload: " + e.getMessage());
+        }
+        return null;
+    }
 
-        String queryString = request.getQueryString();
-        String forwardPath = "/generic-webhook-trigger/invoke";
-        if (queryString != null && !queryString.isEmpty()) {
-            forwardPath += "?" + queryString;
+    private List<String> triggerMatchingJobs(String repoFullName) {
+        List<String> triggered = new ArrayList<>();
+        Jenkins jenkins = Jenkins.get();
+
+        LOGGER.info("Scanning jobs for repo " + repoFullName);
+
+        try (var ignored = hudson.security.ACL.as2(hudson.security.ACL.SYSTEM2)) {
+        for (var item : jenkins.getItems()) {
+            if (!(item instanceof hudson.model.AbstractItem)) {
+                continue;
+            }
+            try {
+                hudson.model.AbstractItem abstractItem = (hudson.model.AbstractItem) item;
+                String configXml = abstractItem.getConfigFile().asString();
+                LOGGER.info("Checking " + item.getFullName() + ": match=" + configXml.contains(repoFullName));
+
+                if (!configXml.contains(repoFullName)) {
+                    continue;
+                }
+
+                if (item instanceof hudson.model.Job) {
+                    hudson.model.Job<?, ?> jobItem = (hudson.model.Job<?, ?>) item;
+                    WebhookExcludeProperty prop = jobItem.getProperty(WebhookExcludeProperty.class);
+                    if (prop != null && prop.isExcludeFromWebhook()) {
+                        LOGGER.info("Skipping " + item.getFullName() + " (excluded from webhook triggers)");
+                        continue;
+                    }
+                }
+
+                if (item instanceof jenkins.model.ParameterizedJobMixIn.ParameterizedJob) {
+                    @SuppressWarnings("unchecked")
+                    var job = (jenkins.model.ParameterizedJobMixIn.ParameterizedJob<?, ?>) item;
+                    LOGGER.info("Triggering " + job.getFullName() + " for repo " + repoFullName);
+                    job.scheduleBuild2(0, new hudson.model.CauseAction(new WebhookCause(repoFullName)));
+                    triggered.add(job.getFullName());
+                }
+            } catch (Exception e) {
+                LOGGER.warning("Error checking " + item.getFullName() + ": " + e.getMessage());
+            }
         }
 
-        final String path = forwardPath;
-        request.setAttribute("ci-ngrok.forwarded-body", body);
+        } // end ACL.as2
+        return triggered;
+    }
 
-        return new HttpResponse() {
-            @Override
-            public void generateResponse(StaplerRequest2 req, StaplerResponse2 rsp, Object node)
-                    throws IOException, ServletException {
-                try {
-                    Jenkins.get().getServletContext()
-                            .getRequestDispatcher(path)
-                            .forward(req, rsp);
-                } catch (Exception e) {
-                    LOGGER.severe("Failed to forward to Generic Webhook Trigger: " + e.getMessage());
-                    rsp.setStatus(502);
-                    rsp.getWriter().write("Failed to forward webhook");
-                }
-            }
-        };
+    public static class WebhookCause extends Cause {
+        private final String repoFullName;
+
+        public WebhookCause(String repoFullName) {
+            this.repoFullName = repoFullName;
+        }
+
+        @Override
+        public String getShortDescription() {
+            return "Triggered by webhook from " + repoFullName + " via ci-ngrok";
+        }
     }
 }

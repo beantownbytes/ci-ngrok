@@ -1,0 +1,6 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
+    <f:entry title="ci-ngrok Webhook" field="excludeFromWebhook">
+        <f:checkbox title="Exclude from ci-ngrok webhook triggers"/>
+    </f:entry>
+</j:jelly>
