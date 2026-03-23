@@ -42,15 +42,23 @@ public class WebhookProxyAction implements UnprotectedRootAction {
     }
 
     public HttpResponse doWebhook(StaplerRequest2 request) throws IOException {
+        String remoteAddr = request.getRemoteAddr();
+        String userAgent = request.getHeader("User-Agent");
+        String deliveryId = request.getHeader("X-GitHub-Delivery");
+
+        LOGGER.info("Webhook request from ip=" + remoteAddr
+                + " ua=" + userAgent
+                + " delivery=" + deliveryId);
+
         CiNgrokGlobalConfiguration config = CiNgrokGlobalConfiguration.get();
         if (config == null || !config.isEnabled()) {
-            LOGGER.warning("Webhook received but plugin is disabled");
+            LOGGER.warning("REJECTED ip=" + remoteAddr + " reason=disabled");
             return HttpResponses.text("ci-ngrok is not enabled");
         }
 
         String secret = config.resolveSecret(config.getWebhookSecretCredentialId());
         if (secret == null || secret.isEmpty()) {
-            LOGGER.warning("Webhook secret not configured");
+            LOGGER.warning("REJECTED ip=" + remoteAddr + " reason=no_secret_configured");
             return HttpResponses.text("Webhook secret not configured");
         }
 
@@ -62,22 +70,22 @@ public class WebhookProxyAction implements UnprotectedRootAction {
                         headers.getOrDefault("X-Gitea-Event", "")));
 
         if ("ping".equalsIgnoreCase(event)) {
-            LOGGER.info("Ping received");
+            LOGGER.info("ACCEPTED ip=" + remoteAddr + " event=ping");
             return HttpResponses.text("pong");
         }
 
         WebhookProvider provider = detectProvider(headers);
         if (provider == null) {
-            LOGGER.warning("No matching webhook provider for request headers");
+            LOGGER.warning("REJECTED ip=" + remoteAddr + " reason=unsupported_provider ua=" + userAgent);
             return HttpResponses.text("Unsupported webhook source");
         }
 
         if (!provider.validate(headers, body, secret)) {
-            LOGGER.warning("Invalid " + provider.getName() + " webhook signature");
+            LOGGER.warning("REJECTED ip=" + remoteAddr + " reason=invalid_signature provider=" + provider.getName() + " ua=" + userAgent);
             return HttpResponses.text("Invalid signature");
         }
 
-        LOGGER.info("Valid " + provider.getName() + " webhook received");
+        LOGGER.info("ACCEPTED ip=" + remoteAddr + " provider=" + provider.getName() + " event=" + event);
 
         String repoFullName = extractRepoFullName(body);
         if (repoFullName == null || repoFullName.isEmpty()) {
